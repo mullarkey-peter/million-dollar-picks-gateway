@@ -1,0 +1,30 @@
+{
+  "name": "apollo-gateway",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "apollo",
+    "federation",
+    "graphql",
+    "gateway",
+    "microservices"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "description": "Apollo Federation Gateway for Million Dollar Picks microservices",
+  "dependencies": {
+    "@apollo/gateway": "^2.5.1",
+    "@apollo/server": "^4.9.3",
+    "graphql": "^16.8.1",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
