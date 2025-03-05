@@ -1,198 +1,81 @@
 const { ApolloServer } = require('@apollo/server');
 const { ApolloGateway, IntrospectAndCompose } = require('@apollo/gateway');
-const { startStandaloneServer } = require('@apollo/server/standalone');
-const { parse } = require('graphql');
+const express = require('express');
+const { expressMiddleware } = require('@apollo/server/express4');
+const http = require('http');
+const cors = require('cors');
+const bodyParser = require('body-parser');
 
-const supergraphSdl = `
-  extend schema
-    @link(url: "https://specs.apollo.dev/federation/v2.0",
-          import: ["@key", "@shareable"])
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
 
-  type Mutation {
-    register(username: String!, password: String!): RegisterResponse
-  }
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
 
-  type RegisterResponse {
-    user: User!
-    token: String!
-    success: Boolean!
-    message: String
-  }
-`;
+async function createGatewayWithRetry(maxRetries = 10, retryInterval = 5000) {
+    let retries = 0;
+    let gateway = null;
 
-async function startApolloGateway() {
-    // Configure the gateway to use introspection to discover the schemas
-    const gateway = new ApolloGateway({
-        supergraphSdl,
-        buildService({ url }) {
-            return { url };
-        },
-        // Service configuration for our microservices
-        serviceList: [
-            { name: 'users', url: 'http://user-service:8080/graphql' },
-            { name: 'auth', url: 'http://auth-service:8080/graphql' }
-        ],
-        introspectionHeaders: {
-            // Optional headers for services that might require authentication for introspection
-            // 'Authorization': 'Bearer token',
-        },
-        // Implement custom resolvers for the gateway
-        async resolvers({ parentType, fieldName }) {
-            // Register resolver that coordinates between auth and user services
-            if (parentType === 'Mutation' && fieldName === 'register') {
-                return async (parent, args, context, info) => {
-                    try {
-                        // Step 1: Create the user in the user service
-                        const userResult = await context.userService.createOrUpdateUser(args.username);
+    while (retries < maxRetries) {
+        try {
+            console.log(`Attempt ${retries + 1} to connect to subgraphs...`);
 
-                        if (!userResult || !userResult.id) {
-                            return {
-                                success: false,
-                                message: 'Failed to create user'
-                            };
-                        }
+            // Create a new gateway instance only if it doesn't already exist
+            gateway = new ApolloGateway({
+                supergraphSdl: new IntrospectAndCompose({
+                    subgraphs: [
+                        { name: 'users', url: 'http://user-service:8080/graphql' },
+                    ],
+                }),
+                buildService({ name, url }) {
+                    console.log(`Configuring subgraph: ${name} at ${url}`);
+                    return new (require('@apollo/gateway').RemoteGraphQLDataSource)({
+                        url,
+                        willSendRequest({ request, context }) {
+                            // Will need Auth header here
+                        },
+                    });
+                },
+            });
 
-                        // Step 2: Create credentials in the auth service
-                        const credentialsResult = await context.authService.createCredentials({
-                            username: args.username,
-                            password: args.password,
-                            userId: userResult.id
-                        });
+            console.log('Successfully created gateway configuration');
+            return gateway;
 
-                        if (!credentialsResult || !credentialsResult.id) {
-                            return {
-                                success: false,
-                                message: 'Failed to create credentials'
-                            };
-                        }
+        } catch (error) {
+            retries++;
+            console.error(`Failed to connect to subgraphs (attempt ${retries}/${maxRetries}):`, error.message);
 
-                        // Step 3: Login to get a token
-                        const authResponse = await context.authService.login({
-                            username: args.username,
-                            password: args.password
-                        });
-
-                        // Step 4: Return the combined result
-                        return {
-                            user: userResult,
-                            token: authResponse.token,
-                            success: true,
-                            message: 'Registration successful'
-                        };
-                    } catch (error) {
-                        console.error('Registration error:', error);
-                        return {
-                            success: false,
-                            message: `Registration failed: ${error.message}`
-                        };
-                    }
-                };
+            if (retries >= maxRetries) {
+                console.error('Max retries reached. Exiting...');
+                throw error;
             }
 
-            return null;
+            console.log(`Waiting ${retryInterval / 1000} seconds before next attempt...`);
+            await new Promise(resolve => setTimeout(resolve, retryInterval));
         }
-    });
-
-    // Initialize the ApolloServer with the gateway
-    const server = new ApolloServer({
-        gateway,
-        subscriptions: false,
-        context: async ({ req }) => {
-            // Create service proxies for direct calling in custom resolvers
-            const authServiceProxy = createServiceProxy('http://auth-service:8080/graphql');
-            const userServiceProxy = createServiceProxy('http://user-service:8080/graphql');
-
-            return {
-                authService: authServiceProxy,
-                userService: userServiceProxy,
-                headers: req.headers
-            };
-        }
-    });
-
-    // Start the server
-    const { url } = await startStandaloneServer(server, {
-        listen: { port: 4000 }
-    });
-
-    console.log(`🚀 Apollo Gateway ready at ${url}`);
+    }
 }
 
-// Helper function to create service proxies
-function createServiceProxy(serviceUrl) {
-    return {
-        async createOrUpdateUser(username) {
-            // Implementation for user service calls
-            const query = `
-        mutation {
-          createOrUpdateUser(username: "${username}") {
-            id
-            username
-            registrationDate
-          }
-        }
-      `;
+async function startServer() {
+    try {
+        const gateway = await createGatewayWithRetry();
+        const server = new ApolloServer({ gateway });
+        await server.start();
 
-            const response = await fetch(serviceUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
-            });
+        app.use('/graphql', expressMiddleware(server));
 
-            const result = await response.json();
-            return result.data?.createOrUpdateUser;
-        },
+        const httpServer = http.createServer(app);
+        const PORT = 4000;
 
-        async createCredentials({ username, password, userId }) {
-            // Implementation for auth service credential creation
-            const query = `
-        mutation {
-          createCredentials(username: "${username}", password: "${password}", userId: "${userId}") {
-            id
-            username
-            userId
-          }
-        }
-      `;
-
-            const response = await fetch(serviceUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
-            });
-
-            const result = await response.json();
-            return result.data?.createCredentials;
-        },
-
-        async login({ username, password }) {
-            // Implementation for auth service login
-            const query = `
-        mutation {
-          login(username: "${username}", password: "${password}") {
-            token
-            userId
-            username
-            success
-            message
-          }
-        }
-      `;
-
-            const response = await fetch(serviceUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
-            });
-
-            const result = await response.json();
-            return result.data?.login;
-        }
-    };
+        httpServer.listen(PORT, () => {
+            console.log(`🚀 Gateway server running at http://localhost:${PORT}/graphql`);
+        });
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
 }
 
-// Start the gateway
-startApolloGateway().catch(error => {
-    console.error('Failed to start Apollo Gateway:', error);
-    process.exit(1);
-});
+startServer();

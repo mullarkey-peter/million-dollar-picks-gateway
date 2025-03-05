@@ -21,6 +21,9 @@
   "dependencies": {
     "@apollo/gateway": "^2.5.1",
     "@apollo/server": "^4.9.3",
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
     "graphql": "^16.8.1",
     "node-fetch": "^2.7.0"
   },
