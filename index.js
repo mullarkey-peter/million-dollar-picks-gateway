@@ -22,8 +22,7 @@ async function createGatewayWithRetry(maxRetries = 10, retryInterval = 5000) {
         try {
             console.log(`Attempt ${retries + 1} to connect to subgraphs...`);
 
-            // Create a new gateway instance only if it doesn't already exist
-            gateway = new ApolloGateway({
+            const gateway = new ApolloGateway({
                 supergraphSdl: new IntrospectAndCompose({
                     subgraphs: [
                         { name: 'users', url: 'http://user-service:8080/graphql' },
@@ -35,10 +34,7 @@ async function createGatewayWithRetry(maxRetries = 10, retryInterval = 5000) {
                     return new (require('@apollo/gateway').RemoteGraphQLDataSource)({
                         url,
                         willSendRequest({ request, context }) {
-                            // Forward the authorization header if it exists in the context
-                            if (context.token) {
-                                request.http.headers.set('Authorization', `Bearer ${context.token}`);
-                            }
+                            request.http.headers.set('Authorization', `Bearer ${context.token}`);
                         },
                     });
                 },
