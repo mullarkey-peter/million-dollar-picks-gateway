@@ -1,5 +1,5 @@
 const { ApolloServer } = require('@apollo/server');
-const { ApolloGateway, IntrospectAndCompose } = require('@apollo/gateway');
+const { ApolloGateway, IntrospectAndCompose, RemoteGraphQLDataSource} = require('@apollo/gateway');
 const express = require('express');
 const { expressMiddleware } = require('@apollo/server/express4');
 const http = require('http');
@@ -31,10 +31,15 @@ async function createGatewayWithRetry(maxRetries = 10, retryInterval = 5000) {
                 }),
                 buildService({ name, url }) {
                     console.log(`Configuring subgraph: ${name} at ${url}`);
-                    return new (require('@apollo/gateway').RemoteGraphQLDataSource)({
+                    return new RemoteGraphQLDataSource({
                         url,
                         willSendRequest({ request, context }) {
-                            request.http.headers.set('Authorization', `Bearer ${context.token}`);
+                            if (context.token) {
+                                console.log(`Forwarding token to ${name}`);
+                                request.http.headers.set('Authorization', `Bearer ${context.token}`);
+                            } else {
+                                console.log(`No token to forward to ${name}`);
+                            }
                         },
                     });
                 },
@@ -64,9 +69,9 @@ async function startServer() {
         const server = new ApolloServer({ gateway });
         await server.start();
 
-        // Add middleware to extract the token from the request headers
         app.use('/graphql', express.json(), (req, res, next) => {
             const token = req.headers.authorization?.split(' ')[1] || '';
+            console.log('Gateway received request with body:', JSON.stringify(req.body));
             req.token = token;
             next();
         });
@@ -74,9 +79,12 @@ async function startServer() {
         // Pass the context to the Apollo Server
         app.use('/graphql', expressMiddleware(server, {
             context: async ({ req }) => {
-                // Create a context object with the authentication token
+                // Extract token from the request headers
+                const token = req.headers.authorization?.split(' ')[1] || '';
+                console.log(`Received request with auth token: ${token ? 'present' : 'not present'}`);
+                // Return context with the token
                 return {
-                    token: req.token
+                    token: token
                 };
             }
         }));
