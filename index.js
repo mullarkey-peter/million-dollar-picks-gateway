@@ -27,6 +27,7 @@ async function createGatewayWithRetry(maxRetries = 10, retryInterval = 5000) {
                 supergraphSdl: new IntrospectAndCompose({
                     subgraphs: [
                         { name: 'users', url: 'http://user-service:8080/graphql' },
+                        { name: 'auth', url: 'http://auth-service:8080/graphql'}
                     ],
                 }),
                 buildService({ name, url }) {
