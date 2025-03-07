@@ -35,7 +35,10 @@ async function createGatewayWithRetry(maxRetries = 10, retryInterval = 5000) {
                     return new (require('@apollo/gateway').RemoteGraphQLDataSource)({
                         url,
                         willSendRequest({ request, context }) {
-                            // Will need Auth header here
+                            // Forward the authorization header if it exists in the context
+                            if (context.token) {
+                                request.http.headers.set('Authorization', `Bearer ${context.token}`);
+                            }
                         },
                     });
                 },
@@ -65,7 +68,22 @@ async function startServer() {
         const server = new ApolloServer({ gateway });
         await server.start();
 
-        app.use('/graphql', expressMiddleware(server));
+        // Add middleware to extract the token from the request headers
+        app.use('/graphql', express.json(), (req, res, next) => {
+            const token = req.headers.authorization?.split(' ')[1] || '';
+            req.token = token;
+            next();
+        });
+
+        // Pass the context to the Apollo Server
+        app.use('/graphql', expressMiddleware(server, {
+            context: async ({ req }) => {
+                // Create a context object with the authentication token
+                return {
+                    token: req.token
+                };
+            }
+        }));
 
         const httpServer = http.createServer(app);
         const PORT = 4000;
